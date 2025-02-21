@@ -2,20 +2,46 @@ from machine import Pin, I2C, RTC
 import time
 import ads1x15
 import ssd1306 # I2C oled screen
+import urtc
+import sdcard
+import vfs
 
 addr = 72 # I2C address for the ADC
 gain = 0 # Gain of ADC
 
+##### Setting up SD card ######
+cs = Pin(17,Pin.OUT)
+spi = machine.SPI(0, 
+                  baudrate=1000000,
+                  polarity=0,
+                  phase=0,
+                  bits=8,
+                  firstbit=machine.SPI.MSB,
+                  sck=Pin(18),
+                  mosi=Pin(19),
+                  miso=Pin(16))
+sd = sdcard.SDCard(spi, cs)
+filsys = vfs.VfsFat(sd)
+
+#### Initializing I2C devices ####
+#i2c_adc = I2C(0, sda=Pin(16), scl=Pin(17)) 
+i2c_screen = I2C(1,sda=Pin(2), scl=Pin(3))
+display = ssd1306.SSD1306_I2C(128, 64, i2c_screen)
+ads = ads1x15.ADS1115(i2c_screen, addr, gain)
+
+# Setup rtc to read it and save in data
+# this is the clock of the cowbell datalogger shield
+i2c_clock = I2C(0,scl=Pin(5), sda=Pin(4))
+rtc = urtc.PCF8523(i2c_clock)
+
 #### Buttons ####
-sel_1 = Pin(4,Pin.IN, Pin.PULL_UP) # Selection button 1
-sel_2 = Pin(5, Pin.IN, Pin.PULL_UP) # Selection button 2
+sel_1 = Pin(6,Pin.IN, Pin.PULL_UP) # Selection button 1
+sel_2 = Pin(7, Pin.IN, Pin.PULL_UP) # Selection button 2
 
 Button_1 = False # Selection button 1
 Button_2 = False # Selection button 2
 measurement_active = False # tells us if a measurement is currently active
 filename = "" # filename for saving the data
-
-rtc = RTC()
 
 def Button_1_interrupt(pin):
     global Button_1
@@ -52,9 +78,9 @@ def startup_screen(display, device_status):
     display.text("Startup of Li850", 0, 0, 1)
     # Buttons at the bottom
     display.text("Time", 3,56,1)
-    display.rect(0, 54, len("Time")+6, 10, 1)
-    display.text("Stop",128-(len("PPM")*8+3),56,1)
-    display.rect(128-(len("PPM")*8+6), 54, len("PPM")+6, 10, 1)
+    display.rect(0, 54, len("Time")*8+6, 15, 1)
+    display.text("PPM",128-(len("PPM")*8+3),56,1)
+    display.rect(128-(len("PPM")*8+6), 54, len("PPM")*8+6, 15, 1)
     display.show()
     time.sleep(0.5)
     return device_status
@@ -78,9 +104,9 @@ def ppm_disp_screen(display, adc, device_status):
     display.text("H20 : %1.1f" % values[1],5,30,1)
     # Buttons at the bottom
     display.text("Start", 3,56,1)
-    display.rect(0, 54, len("Start")+6, 10, 1)
-    display.text("Stop",128-(len("Back")*8+3),56,1)
-    display.rect(128-(len("Back")*8+6), 54, len("Back")+6, 10, 1)
+    display.rect(0, 54, len("Start")*8+6, 15, 1)
+    display.text("Back",128-(len("Back")*8+3),56,1)
+    display.rect(128-(len("Back")*8+6), 54, len("Back")*8+6, 15, 1)
     display.show()
     time.sleep(0.5)
     return device_status
@@ -92,20 +118,25 @@ def measurement_screen(display, adc,device_status):
     global filename
     if Button_1:
         Button_1 = False
-        return "Slope"
+        if device_status=="Slope":
+            return "Measure"
+        else:
+            return "Slope"
     if Button_2:
         Button_2 = False
         measurement_active = False
         return "PPM"
     # create file if the meausrement is the first one
     if not measurement_active:
-        filename = "newfile.txt"
+        filename = "/sd/data"+str(rtc.datetime().month)+"-"+str(rtc.datetime().day)+"-"+str(rtc.datetime().hour)+"-"+str(rtc.datetime().minute)+".txt"
         measurement_active = True
     # make measurement
     values = make_measurement(ads=adc)
     # Append file with measurement
-    with open(filename,'a') as f:
-        f.write("%1.2f,%1.2f \n" % values)
+    if (rtc.datetime().second % 5) == 0:
+        with open(filename,'a') as f:
+            f.write(str(rtc.datetime().minute)+","+str(rtc.datetime().second)+",")
+            f.write("%1.2f,%1.2f \n" % values)
     #### Screen display ####
     if device_status=="Slope":
         # Show the slopes of the CO2 and H2O
@@ -117,9 +148,9 @@ def measurement_screen(display, adc,device_status):
             display.text("H20 slope: %1.1f" % values[1],5,30,1)
             # Buttons at the bottom
             display.text("Inst.", 3,56,1)
-            display.rect(0, 54, len("Inst.")+6, 10, 1)
+            display.rect(0, 54, len("Inst.")*8+6, 15, 1)
             display.text("Stop",128-(len("Stop")*8+3),56,1)
-            display.rect(128-(len("Stop")*8+6), 54, len("Stop")+6, 10, 1)
+            display.rect(128-(len("Stop")*8+6), 54, len("Stop")*8+6, 15, 1)
             display.show()
             dots = dots+"."
             time.sleep(0.2)
@@ -133,9 +164,9 @@ def measurement_screen(display, adc,device_status):
             display.text("H20 : %1.1f" % values[1],5,30,1)
             # Buttons at the bottom
             display.text("Slope", 3,56,1)
-            display.rect(0, 54, len("Slope")+6, 10, 1)
+            display.rect(0, 54, len("Slope")*8+6, 15, 1)
             display.text("Stop",128-(len("Stop")*8+3),56,1)
-            display.rect(128-(len("Stop")*8+6), 54, len("Stop")+6, 10, 1)
+            display.rect(128-(len("Stop")*8+6), 54, len("Stop")*8+6, 15, 1)
             display.show()
             dots = dots+"."
             time.sleep(0.2)
@@ -155,15 +186,15 @@ def time_display():
     display.fill(0)
     display.text("Startup of Li850", 0, 0, 1)
     # display the RTC time and date
-    display.text("Month: "+str(now[1]), 5, 9+5, 1)
-    display.text("Day: "+str(now[2]), 5, 18+5, 1)
-    display.text("Hour: "+str(now[3]), 5, 27+5, 1)
-    display.text("Minutes: "+str(now[4]), 5, 36+5, 1)
+    display.text("Month: "+str(now.month), 5, 9+5, 1)
+    display.text("Day: "+str(now.day), 5, 18+5, 1)
+    display.text("Hour: "+str(now.hour), 5, 27+5, 1)
+    display.text("Minutes: "+str(now.minute), 5, 36+5, 1)
     # Buttons at the bottom
     display.text("Update", 3,56,1)
-    display.rect(0, 54, len("Update")+6, 10, 1)
+    display.rect(0, 54, len("Update")*8+6, 15, 1)
     display.text("PPM",128-(len("PPM")*8+3),56,1)
-    display.rect(128-(len("PPM")*8+6), 54, len("PPM")+6, 10, 1)
+    display.rect(128-(len("PPM")*8+6), 54, len("PPM")*8+6, 15, 1)
     # show
     display.show()
     # Sleep to give time
@@ -188,18 +219,10 @@ def call_screens(disp,adc,device_status):
         status = "Startup"
     return status
 
-
-#### Initializing I2C devices ####
-i2c_adc = I2C(0, sda=Pin(16), scl=Pin(17)) 
-i2c_screen = I2C(1,sda=Pin(2), scl=Pin(3))
-
-
-display = ssd1306.SSD1306_I2C(128, 64, i2c_screen)
-ads = ads1x15.ADS1115(i2c_adc, addr, gain)
 status = "Startup"
 #### Starting up ####
 startup_screen(display, status)
-
+vfs.mount(filsys, "/sd")
 #Functionning
 while True:
     status = call_screens(display, ads, status)
