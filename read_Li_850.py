@@ -1,4 +1,5 @@
 from machine import Pin, I2C, RTC
+from array import array
 import time
 import ads1x15
 import ssd1306 # I2C oled screen
@@ -8,6 +9,8 @@ import vfs
 
 addr = 72 # I2C address for the ADC
 gain = 0 # Gain of ADC
+
+timestep_meas = 5 # time between two logs in secs
 
 ##### Setting up SD card ######
 cs = Pin(17,Pin.OUT)
@@ -42,6 +45,8 @@ Button_1 = False # Selection button 1
 Button_2 = False # Selection button 2
 measurement_active = False # tells us if a measurement is currently active
 filename = "" # filename for saving the data
+values_mem_CO2 = array('f')#
+values_mem_H2O = array('f')#
 
 def Button_1_interrupt(pin):
     global Button_1
@@ -53,13 +58,36 @@ def Button_2_interrupt(pin):
 sel_1.irq(trigger=Pin.IRQ_RISING, handler=Button_1_interrupt) # interrupt for button 1
 sel_2.irq(trigger=Pin.IRQ_RISING, handler=Button_2_interrupt) # interrupt for button 2
 
+def calculate_slope(value_array, timestep):
+    # calculates the slope in var/min
+    if len(value_array)>5:
+        diff = 0
+        for i,val in enumerate(value_array[:-1]):
+            diff = diff + (value_array[i+1] - val)/len(value_array)
+        slope = diff * 60/timestep # to get value in var/min    
+        return slope
+    else:
+        return 0
+
+def update_values(value_array, value):
+    # add new value to end of array (with array never going beyond 10 values
+    if len(value_array)<20:
+        # just append if at the beginning of array
+        value_array.append(value)
+    else:
+        # add new element at the right of array and remove oldest value
+        for i,val in enumerate(value_array[:-1]):
+            value_array[i] = value_array[i+1]
+        value_array[-1] = value
+    return value_array
+
 def make_measurement(ads,dac_max_voltage=2.5,dac_range_CO2=5000, dac_range_H2O=60):
     # measure the output of the Li850 dac using an ADC
     value_DAC_CO2 = ads.raw_to_v(ads.read(1,0)) # read output of Li-850 dac for CO2
     value_DAC_H2O = ads.raw_to_v(ads.read(1,1)) # read output of Li-850 dac for H2O
     value_CO2 = value_DAC_CO2 / dac_max_voltage * dac_range_CO2 # ppm CO2
     value_H2O = value_DAC_H2O / dac_max_voltage * dac_range_H2O # mmol H2O/mol
-    print(value_DAC_CO2, value_DAC_H2O)
+    #print(value_DAC_CO2, value_DAC_H2O)
     return (value_CO2,value_H2O)
 
 def startup_screen(display, device_status):
@@ -111,11 +139,15 @@ def ppm_disp_screen(display, adc, device_status):
     time.sleep(0.5)
     return device_status
     
-def measurement_screen(display, adc,device_status):
+def measurement_screen(display, adc,device_status, timestep):
     global Button_1
     global Button_2
     global measurement_active
     global filename
+    global values_mem_CO2
+    global values_mem_H2O
+    global timestep_meas
+    
     if Button_1:
         Button_1 = False
         if device_status=="Slope":
@@ -130,22 +162,32 @@ def measurement_screen(display, adc,device_status):
     if not measurement_active:
         filename = "/sd/data"+str(rtc.datetime().month)+"-"+str(rtc.datetime().day)+"-"+str(rtc.datetime().hour)+"-"+str(rtc.datetime().minute)+".txt"
         measurement_active = True
+        values_mem_CO2 = array('f')
+        values_mem_H2O = array('f')
     # make measurement
     values = make_measurement(ads=adc)
     # Append file with measurement
-    if (rtc.datetime().second % 5) == 0:
+    if (rtc.datetime().second % timestep) == 0:
         with open(filename,'a') as f:
             f.write(str(rtc.datetime().minute)+","+str(rtc.datetime().second)+",")
             f.write("%1.2f,%1.2f \n" % values)
+        values_mem_CO2 = update_values(values_mem_CO2,values[0])
+        values_mem_H2O = update_values(values_mem_H2O,values[1])
+        
+        time.sleep(0.6) # necessary so we don't take measurement twice 
+    
     #### Screen display ####
     if device_status=="Slope":
         # Show the slopes of the CO2 and H2O
+        slope_CO2 = calculate_slope(values_mem_CO2,timestep_meas)
+        slope_H2O = calculate_slope(values_mem_H2O, timestep_meas)
         dots = ""
         for i in range(0,5):
             display.fill(0)
             display.text("Measuring"+dots, 0, 0, 1)
-            display.text("CO2 slope: %1.1f" % values[0],5,15,1)
-            display.text("H20 slope: %1.1f" % values[1],5,30,1)
+            display.text("CO2 slp.: %1.1f" % slope_CO2,5,15,1)
+            display.text("H20 slp.: %1.1f" % slope_H2O,5,30,1)
+            display.text("Slopes in min-1",0,43,1)
             # Buttons at the bottom
             display.text("Inst.", 3,56,1)
             display.rect(0, 54, len("Inst.")*8+6, 15, 1)
@@ -153,7 +195,7 @@ def measurement_screen(display, adc,device_status):
             display.rect(128-(len("Stop")*8+6), 54, len("Stop")*8+6, 15, 1)
             display.show()
             dots = dots+"."
-            time.sleep(0.2)
+            time.sleep(0.1)
     else:
         # Show the instantaneous values
         dots = ""
@@ -169,7 +211,7 @@ def measurement_screen(display, adc,device_status):
             display.rect(128-(len("Stop")*8+6), 54, len("Stop")*8+6, 15, 1)
             display.show()
             dots = dots+"."
-            time.sleep(0.2)
+            time.sleep(0.1)
     
     return device_status
 
@@ -208,7 +250,7 @@ def call_screens(disp,adc,device_status):
     elif device_status == "PPM":
         status = ppm_disp_screen(disp, adc, device_status)
     elif device_status == "Measure" or device_status == "Slope":
-        status = measurement_screen(disp, adc, device_status)
+        status = measurement_screen(disp, adc, device_status, timestep_meas)
     elif device_status == "Time":
         status = time_display()
     else:
