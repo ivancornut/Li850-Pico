@@ -57,7 +57,8 @@ class Li850:
     
     def _save_data_to_file(self, var1, var2):
         with open(self.filename,'a') as f:
-            f.write(str(self.rtc.datetime().hour)+":"+str(self.rtc.datetime().minute)+":"+str(self.rtc.datetime().second)+",")
+            now = self.rtc.datetime()
+            f.write(str(now.year)+"-"+str(now.month)+"-"+str(now.day)+"T"+str(now.hour)+":"+str(now.minute)+":"+str(now.second)+",")
             f.write("%1.2f,%1.2f \n" % (var1, var2))
     
     def _Button_left_interrupt(self, Pin):
