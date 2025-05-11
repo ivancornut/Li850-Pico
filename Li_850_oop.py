@@ -203,7 +203,3 @@ vfs.mount(filsys, "/sd")
 
 test = Li850(2)
 test.run()
-
-
-
-    
