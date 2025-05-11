@@ -1,4 +1,5 @@
 from machine import Pin, I2C, RTC, Timer
+import machine
 from array import array
 import time
 import ads1x15
@@ -48,17 +49,25 @@ class Li850:
     
     def make_measurement(self):
         # measure the output of the Li850 dac using an ADC
-        value_DAC_CO2 = self.adc.raw_to_v(self.adc.read(1,0)) # read output of Li-850 dac for CO2
-        value_DAC_H2O = self.adc.raw_to_v(self.adc.read(1,1)) # read output of Li-850 dac for H2O
-        self.CO2 = value_DAC_CO2 / self.dac_max_voltage * self.dac_range_CO2 # ppm CO2
-        self.H2O = value_DAC_H2O / self.dac_max_voltage * self.dac_range_H2O # mmol H2O/mol
-        #print(value_DAC_CO2, value_DAC_H2O)
-        #return (value_CO2,value_H2O)
+        state = machine.disable_irq() # stops interrupts to prevent any meas issues
+        try:
+            value_DAC_CO2 = self.adc.raw_to_v(self.adc.read(1,0)) # read output of Li-850 dac for CO2
+            value_DAC_H2O = self.adc.raw_to_v(self.adc.read(1,1)) # read output of Li-850 dac for H2O
+            self.CO2 = value_DAC_CO2 / self.dac_max_voltage * self.dac_range_CO2 # ppm CO2
+            self.H2O = value_DAC_H2O / self.dac_max_voltage * self.dac_range_H2O # mmol H2O/mol
+        except:
+            self.CO2 = 9999
+            self.H2O = 9999
+        machine.enable_irq(state) # reenables interrupts
+        #print(value_DAC_CO2, value_DAC_H2O) - enable for debug
+        #return (value_CO2,value_H2O) - enable for debug
     
     def _save_data_to_file(self, var1, var2):
+        state = machine.disable_irq()
         with open(self.filename,'a') as f:
             f.write(str(self.rtc.datetime().minute)+","+str(self.rtc.datetime().second)+",")
             f.write("%1.2f,%1.2f \n" % (var1, var2))
+        machine.enable_irq(state)
     
     def _Button_left_interrupt(self, Pin):
         self.Button_left = True
